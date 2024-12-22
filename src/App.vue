@@ -1,17 +1,11 @@
 <template>
-  <img alt="Vue logo" src="./assets/logo.png">
-  <HelloWorld msg="Welcome to Your Vue.js App"/>
+  <TetrisBoard />
+  <TetrisBoard2 />
 </template>
 
-<script>
-import HelloWorld from './components/HelloWorld.vue'
-
-export default {
-  name: 'App',
-  components: {
-    HelloWorld
-  }
-}
+<script setup>
+import TetrisBoard from "./views/TetrisBoard.vue";
+import TetrisBoard2 from "./views/TetrisBoard2.vue";
 </script>
 
 <style>
