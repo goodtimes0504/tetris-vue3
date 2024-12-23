@@ -1,11 +1,11 @@
 <template>
   <TetrisBoard />
-  <TetrisBoard2 />
+  <!-- <TetrisBoard2 /> -->
 </template>
 
 <script setup>
-import TetrisBoard from "./views/TetrisBoard.vue";
-import TetrisBoard2 from "./views/TetrisBoard2.vue";
+import TetrisBoard from './views/TetrisBoard.vue'
+import TetrisBoard2 from './views/TetrisBoard2.vue'
 </script>
 
 <style>

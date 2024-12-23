@@ -8,11 +8,23 @@
       <!-- 显示当前等级 -->
       <div class="level">等级：{{ level }}</div>
       <!-- 开始游戏按钮，当游戏进行时禁用 -->
-      <button @click="startGame" :disabled="isPlaying">开始游戏</button>
+      <button @click="startGame" :disabled="gameState === GameState.PLAYING">
+        开始游戏
+      </button>
       <!-- 暂停游戏按钮，仅在游戏进行时可用 -->
-      <button @click="pauseGame" :disabled="!isPlaying">暂停游戏</button>
+      <button @click="pauseGame" :disabled="gameState !== GameState.PLAYING">
+        暂停游戏
+      </button>
       <!-- 游戏结束提示，仅在游戏结束时显示 -->
-      <div v-if="gameOver" class="game-over">游戏结束!</div>
+      <div v-if="gameState === GameState.GAME_OVER" class="game-over">
+        游戏结束!
+      </div>
+      <div class="combo" v-if="comboCount > 0">
+        连击：{{ comboCount }}
+        <span v-if="comboCount >= 10" class="super-combo">超神！</span>
+        <span v-else-if="comboCount >= 5" class="great-combo">好厉�����！</span>
+      </div>
+      <div class="max-combo">最高连击：{{ maxCombo }}</div>
     </div>
 
     <!-- 游戏主面板：显示方块和网格 -->
@@ -21,9 +33,11 @@
       ref="gameBoard"
       tabindex="0"
       @keydown="handleKeydown"
+      @focus="handleFocus"
+      @blur="handleBlur"
     >
       <!-- 遍历游戏矩阵的每一行 -->
-      <div v-for="(row, i) in gameMatrix" :key="i" class="row">
+      <div v-for="(row, i) in computedMatrix" :key="i" class="row">
         <!-- 遍历每一行的每个单元格 -->
         <div
           v-for="(cell, j) in row"
@@ -55,36 +69,42 @@
 </template>
 
 <script setup>
-// 导入必要的 Vue 组合式 API 函数
-import { ref, onMounted, onUnmounted } from "vue";
+// 1. 先导入必要的 Vue API
+import { ref, onMounted, onUnmounted, computed } from "vue";
 
-// 游戏基本配置常量
-const ROW = 20; // 游戏面板的行数
-const COL = 10; // 游戏面板的列数
-const INTERVAL = 1000; // 方块下落的时间间隔（毫秒）
+// 2. 定义游戏状态枚举（移到最前面）
+const GameState = {
+  IDLE: "idle",
+  PLAYING: "playing",
+  PAUSED: "paused",
+  GAME_OVER: "gameOver",
+};
 
-// 使用 ref 创建响应式游戏状态变量
-const score = ref(0); // 游戏分数
-const level = ref(1); // 游戏等级
-const isPlaying = ref(false); // 游戏是否正在进行
+// 3. 游戏基本配置常量
+const ROW = 20;
+const COL = 10;
+const INTERVAL = 1000;
+
+// 4. 创建响应式状态
+const score = ref(0);
+const level = ref(1);
+const gameState = ref(GameState.IDLE);
 const gameMatrix = ref(
-  // 初始化游戏矩阵，所有单元格值为0
   Array(ROW)
     .fill()
     .map(() => Array(COL).fill(0))
 );
-const currentPiece = ref(null); // 当前活动方块
-const gameInterval = ref(null); // 游戏循环定时器 定时器返回一个整数 这里如果写0 则不能清晰的表明gameInterval是否有值了 所以null更好一些
-const gameOver = ref(false); // 游戏是否结束
-const nextPiece = ref(null); // 下一个方块
+const currentPiece = ref(null);
+const gameInterval = ref(null);
+const gameOver = ref(false);
+const nextPiece = ref(null);
 const nextPieceMatrix = ref(
-  // 初始化预览矩阵，4x4的空矩阵
   Array(4)
     .fill()
     .map(() => Array(4).fill(0))
 );
 
-// 定义所有可能的方块形状
+// 5. 定义所有可能的方块形状
 const SHAPES = {
   I: [[1, 1, 1, 1]], // I形方块
   O: [
@@ -121,33 +141,37 @@ const SHAPES = {
   ],
 };
 
+// 添加连击计数器
+const comboCount = ref(0);
+const maxCombo = ref(0);
+
+// 添加对游戏面板的引用
+const gameBoard = ref(null);
+
 // 开始游戏函数
 const startGame = () => {
-  if (isPlaying.value) return; // 如果游戏已在进行中，直接返回
-  resetGame(); // 重置游戏状态
-  isPlaying.value = true; // 设置游戏状态为进行中
-  gameOver.value = false; // 重置游戏结束状态
-  generateNextPiece(); // 生成下一个方块
-  spawnNewPiece(); // 生成当前方块
-  startGameLoop(); // 启动游戏循环
+  if (gameState.value === GameState.PLAYING) return;
+  resetGame();
+  gameState.value = GameState.PLAYING;
+  generateNextPiece();
+  spawnNewPiece();
+  startGameLoop();
 };
 
 // 暂停游戏函数
 const pauseGame = () => {
-  isPlaying.value = false; // 设置游戏状态为暂停
-  if (gameInterval.value) {
-    clearInterval(gameInterval.value); // 清除游戏循环定时器
-    gameInterval.value = null;
-  }
+  if (gameState.value !== GameState.PLAYING) return;
+  gameState.value = GameState.PAUSED;
 };
 
 // 启动游戏循环
 const startGameLoop = () => {
+  // 根据等级调整下落速度
+  const currentInterval = INTERVAL / (1 + (level.value - 1) * 0.2);
   gameInterval.value = setInterval(() => {
-    if (!isPlaying.value) return; // 如果游戏暂停，不执行
-    moveDown(); // 方块自动下落
-    renderCurrentPiece(); // 重新渲染当前方块
-  }, INTERVAL);
+    if (gameState.value !== GameState.PLAYING) return;
+    moveDown();
+  }, currentInterval);
 };
 
 // 生成新的当前方块
@@ -172,7 +196,6 @@ const spawnNewPiece = () => {
     )
   ) {
     gameOver.value = true;
-    isPlaying.value = false;
     if (gameInterval.value) {
       clearInterval(gameInterval.value);
       gameInterval.value = null;
@@ -181,13 +204,13 @@ const spawnNewPiece = () => {
   }
 
   generateNextPiece(); // 生成下一个方块
-  renderCurrentPiece(); // 渲染当前方块
 };
 
 // 生成下一个方块
 const generateNextPiece = () => {
   const shapes = Object.keys(SHAPES); // 获取所有可能的方块形状
-  const randomShape = shapes[Math.floor(Math.random() * shapes.length)]; // 随机选择一个形状
+  const randomShape = shapes[Math.floor(Math.random() * shapes.length)]; // 随机选择一个形状 shapes 是一个数组里面有所有的形状的key randomShape
+
   nextPiece.value = {
     shape: SHAPES[randomShape],
     type: randomShape,
@@ -207,7 +230,7 @@ const renderNextPiece = () => {
   const offsetX = Math.floor((4 - shape[0].length) / 2);
   const offsetY = Math.floor((4 - shape.length) / 2);
 
-  // 将方块形状渲染到预览矩阵中
+  // 将方块形状渲染到预览矩阵中 一维的是y 二维的是x
   for (let i = 0; i < shape.length; i++) {
     for (let j = 0; j < shape[i].length; j++) {
       if (shape[i][j]) {
@@ -219,7 +242,8 @@ const renderNextPiece = () => {
 
 // 处理键盘事件
 const handleKeydown = (e) => {
-  if (!isPlaying.value || gameOver.value) return; // 游戏未进行或已结束时不响应
+  // 只有在游戏进行中才响应键盘事件
+  if (gameState.value !== GameState.PLAYING) return;
 
   switch (e.key) {
     case "ArrowLeft": // 左箭头：向左移动
@@ -255,7 +279,6 @@ const hardDrop = () => {
     currentPiece.value.y++;
   }
 
-  renderCurrentPiece(); // 渲染最终位置
   lockPiece(); // 锁定方块
 };
 
@@ -268,7 +291,7 @@ const resetGame = () => {
   gameMatrix.value = Array(ROW)
     .fill()
     .map(() => Array(COL).fill(0));
-  currentPiece.value = null; // 清除当前方块
+  currentPiece.value = null; // 清除当前块
   nextPiece.value = null; // 清除下一个方块
   // 清空预览矩阵
   nextPieceMatrix.value = Array(4)
@@ -290,6 +313,8 @@ const checkCollision = (piece, x, y) => {
         }
 
         // 检查与其他方块的碰撞
+        // 只在方块在游戏区域内时检查方块碰撞
+        // newY < 0 说明方块还在游戏区域上方，比如l形状,此时无需检查碰撞
         if (newY >= 0 && gameMatrix.value[newY][newX] === 2) {
           return true;
         }
@@ -318,10 +343,8 @@ const lockPiece = () => {
 const moveLeft = () => {
   if (!currentPiece.value) return;
   const newX = currentPiece.value.x - 1;
-  // 检查移动后是否会发生碰撞
   if (!checkCollision(currentPiece.value.shape, newX, currentPiece.value.y)) {
     currentPiece.value.x = newX;
-    renderCurrentPiece();
   }
 };
 
@@ -329,10 +352,8 @@ const moveLeft = () => {
 const moveRight = () => {
   if (!currentPiece.value) return;
   const newX = currentPiece.value.x + 1;
-  // 检查移动后是否会发生碰撞
   if (!checkCollision(currentPiece.value.shape, newX, currentPiece.value.y)) {
     currentPiece.value.x = newX;
-    renderCurrentPiece();
   }
 };
 
@@ -340,12 +361,10 @@ const moveRight = () => {
 const moveDown = () => {
   if (!currentPiece.value) return;
   const newY = currentPiece.value.y + 1;
-  // 检查移动后是否会发生碰撞
   if (!checkCollision(currentPiece.value.shape, currentPiece.value.x, newY)) {
     currentPiece.value.y = newY;
-    renderCurrentPiece();
   } else {
-    lockPiece(); // 如果发生碰撞，锁定当前方块
+    lockPiece();
   }
 };
 
@@ -353,67 +372,82 @@ const moveDown = () => {
 const rotate = () => {
   if (!currentPiece.value) return;
 
-  // 计算旋转后的形状（矩阵转置后反转每一行）
-  const rotated = currentPiece.value.shape[0].map((_, i) =>
-    currentPiece.value.shape.map((row) => row[row.length - 1 - i])
-  );
+  const rotated = currentPiece.value.shape[0].map((_, i) => {
+    const reversed = [...currentPiece.value.shape].reverse();
+    return reversed.map((row) => row[i]);
+  });
 
-  // 检查旋转后是否会发生碰撞
   if (!checkCollision(rotated, currentPiece.value.x, currentPiece.value.y)) {
     currentPiece.value.shape = rotated;
-    renderCurrentPiece();
   }
 };
 
-// 检查并清除完整的行
+// 检查并清除完整行
 const checkLines = () => {
   let linesCleared = 0;
 
   for (let i = ROW - 1; i >= 0; i--) {
-    // 检查是否整行都被占用
     if (gameMatrix.value[i].every((cell) => cell === 2)) {
-      // 移除完整的行
       gameMatrix.value.splice(i, 1);
-      // 在顶部添加新的空行
-      gameMatrix.value.unshift(Array(COL).fill(0));
+      gameMatrix.value.unshift(new Array(COL).fill(0));
       linesCleared++;
-      i++; // 重新检查当前行，因为上面的行已经下移
+      i++;
     }
   }
 
-  // 更新分数和等级
+  // 计算分数
   if (linesCleared > 0) {
-    score.value += linesCleared * 100 * level.value;
-    // 每清除10行升一级
+    // 基础分数计算
+    const baseScore = 100;
+    const lineCombo = {
+      1: 1, // 1行
+      2: 2.5, // 2行
+      3: 4, // 3行
+      4: 6, // 4行
+    };
+
+    // 连击奖励系统
+    comboCount.value++;
+    maxCombo.value = Math.max(maxCombo.value, comboCount.value);
+
+    // 连击加成倍率
+    let comboMultiplier = 1;
+    if (comboCount.value >= 10) {
+      comboMultiplier = 3; // 10连击及以上 3倍分数
+    } else if (comboCount.value >= 5) {
+      comboMultiplier = 2; // 5-9连击 2倍分数
+    } else if (comboCount.value >= 3) {
+      comboMultiplier = 1.5; // 3-4连击 1.5倍分数
+    }
+
+    // 最终分数计算
+    const finalScore = Math.floor(
+      baseScore * lineCombo[linesCleared] * level.value * comboMultiplier
+    );
+
+    score.value += finalScore;
     level.value = Math.floor(score.value / 1000) + 1;
+  } else {
+    // 没有消除行，重置连击
+    comboCount.value = 0;
   }
 };
 
-// 渲染当前方块到游戏矩阵
-const renderCurrentPiece = () => {
-  if (!currentPiece.value) return;
+// 修改焦点管理函数
+const handleFocus = () => {
+  if (gameState.value !== GameState.PLAYING) return;
+  // 使用可选链操作符，避免 gameBoard.value 为 null 时的错误
+  // .focus() 是DOM元素的方法，用于使元素获得焦点
+  gameBoard.value?.focus();
+};
 
-  // 清除之前的活动方块（值为1的格子）
-  for (let i = 0; i < ROW; i++) {
-    for (let j = 0; j < COL; j++) {
-      if (gameMatrix.value[i][j] === 1) {
-        gameMatrix.value[i][j] = 0;
-      }
-    }
-  }
-
-  // 渲染当前方块
-  const { shape, x, y } = currentPiece.value;
-  for (let i = 0; i < shape.length; i++) {
-    for (let j = 0; j < shape[i].length; j++) {
-      if (shape[i][j] && y + i >= 0) {
-        gameMatrix.value[y + i][x + j] = 1;
-      }
-    }
+const handleBlur = () => {
+  if (gameState.value === GameState.PLAYING) {
+    pauseGame();
   }
 };
 
-// 组件挂载时添加键盘事件监听
+// 组挂载时添加键盘事件监听
 onMounted(() => {
   window.addEventListener("keydown", handleKeydown);
 });
@@ -424,6 +458,22 @@ onUnmounted(() => {
   if (gameInterval.value) {
     clearInterval(gameInterval.value);
   }
+});
+
+// 使用计算属性优化渲染
+const computedMatrix = computed(() => {
+  const matrix = gameMatrix.value.map((row) => [...row]);
+  if (currentPiece.value) {
+    const { shape, x, y } = currentPiece.value;
+    for (let i = 0; i < shape.length; i++) {
+      for (let j = 0; j < shape[0].length; j++) {
+        if (shape[i][j] && y + i >= 0) {
+          matrix[y + i][x + j] = 1;
+        }
+      }
+    }
+  }
+  return matrix;
 });
 </script>
 
@@ -457,7 +507,7 @@ onUnmounted(() => {
 
   box-sizing: border-box;
 
-  /* 活动方块样式 */
+  /* 活动方块样�� */
   &.active {
     background-color: #42b983;
     border-color: #2c3e50;
@@ -485,7 +535,7 @@ onUnmounted(() => {
     border-radius: 4px;
     cursor: pointer;
 
-    /* 禁用状态样式 */
+    /* 禁用态样式 */
     &:disabled {
       background-color: #ccc;
       cursor: not-allowed;
@@ -523,5 +573,37 @@ onUnmounted(() => {
   text-align: center;
   border-radius: 4px;
   font-weight: bold;
+}
+
+.combo {
+  font-size: 1.2em;
+  font-weight: bold;
+  color: #e44d26;
+
+  .super-combo {
+    color: #ff0000;
+    animation: pulse 0.5s infinite;
+  }
+
+  .great-combo {
+    color: #ff6b6b;
+  }
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.max-combo {
+  font-size: 0.9em;
+  color: #666;
 }
 </style>
